@@ -13,6 +13,16 @@
          hold this, and Filter uses it to restart a filter whose process was killed (#162).
          A normal permission, granted at install, with no prompt. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Continue Watching: reads Android TV's Watch Next list. A runtime permission, granted
+         once with adb shell pm grant; without it the row stays hidden. -->
+    <uses-permission android:name="com.android.providers.tv.permission.READ_EPG_DATA" />
+    <!-- Control Panel: Wi-Fi and Bluetooth state, and Memory's "free" (closes cached background
+         apps only). All normal permissions, granted at install; none reaches the internet. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
+    <!-- Hold OK on an app › Uninstall: opens Android's own confirmation; normal permission. -->
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
     <uses-permission android:name="android.permission.REORDER_TASKS"
         android:maxSdkVersion="27" />
 
@@ -50,6 +60,12 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".Panel"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:screenOrientation="landscape"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|uiMode" />
         <activity
             android:name=".Options"
             android:exported="false"

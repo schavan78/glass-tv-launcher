@@ -65,8 +65,8 @@ final class Config {
             new String[] {"small", "medium", "large"},
             new String[] {"Small", "Medium", "Large"});
     static final Choice LAYOUT = new Choice("layout", "Layout", "rows",
-            new String[] {"rows", "grid"},
-            new String[] {"Rows", "Grid"});
+            new String[] {"rows", "grid", "dock"},
+            new String[] {"Rows", "Grid", "Dock"});
     /**
      * Where the rows sit. Bottom leaves the clock, Options and Settings at the top and moves the
      * rows down to the bottom edge, so the middle of the screen shows the wallpaper.
@@ -115,15 +115,42 @@ final class Config {
             new String[] {"off", "on"},
             new String[] {"Off", "On"});
 
-    static final Choice TILE_STYLE = new Choice("tile_style", "App tile style", "original",
-            new String[] {"original", "afterglow"}, new String[] {"Original", "Afterglow"});
+    static final Choice TILE_STYLE = new Choice("tile_style", "App tile style", "glass",
+            new String[] {"glass", "original", "afterglow"},
+            new String[] {"Frosted glass", "Original", "Afterglow"});
+    /** Ink and glass colour: read from the wallpaper, or fixed. See {@link Tone}. */
+    static final Choice THEME = new Choice("theme", "Text and glass", "auto",
+            new String[] {"auto", "dark", "light"},
+            new String[] {"From the wallpaper", "Dark glass, white text", "Light glass, dark text"});
+    /** A slow pan and zoom over the wallpaper while the home screen is in front. */
+    static final Choice MOTION = new Choice("motion", "Living wallpaper", "on",
+            new String[] {"on", "off"}, new String[] {"On", "Off"});
+    /** The Continue Watching row from Android TV's Watch Next list; hidden while it is empty. */
+    static final Choice WATCH = new Choice("watch", "Continue Watching", "on",
+            new String[] {"on", "off"}, new String[] {"Shown", "Hidden"});
+    /** Layout › Dock: how many apps sit in the dock; the rest open from its ••• icon. */
+    static final Choice DOCK_APPS = new Choice("dock_apps", "Apps in the dock", "8",
+            new String[] {"6", "8", "10", "all"}, new String[] {"6", "8", "10", "All"});
+    /** The big clock's look, and the greeting above it. */
+    static final Choice CLOCK_STYLE = new Choice("clock_style", "Clock style", "glass",
+            new String[] {"glass", "plain"}, new String[] {"Glass", "Plain"});
+    static final Choice GREETING = new Choice("greeting", "Greeting", "on",
+            new String[] {"on", "off"}, new String[] {"Shown", "Hidden"});
+    /**
+     * What happens behind the selected app, with frosted glass: a wash in the app's colour rising
+     * from the bottom, the same plus a glow behind the tile, its art blurred across the screen,
+     * a spotlight on it, or nothing.
+     */
+    static final Choice BACKDROP = new Choice("backdrop", "Focus effect", "fade",
+            new String[] {"fade", "halo", "blur", "spotlight", "off"},
+            new String[] {"Colour fade", "Colour fade + halo", "Blurred art", "Spotlight", "Off"});
     /** Options and Settings in the corner: text chips, or icon buttons whose name shows on focus. */
     static final Choice CHIPS = new Choice("chips", "Chip style", "text",
             new String[] {"text", "icons"}, new String[] {"Text", "Icons"});
     /** The banner of hand-picked titles from {@link Library}; hidden anyway while it has none. */
     static final Choice LIBRARY = new Choice("library", "Library banner", "on",
             new String[] {"on", "off"}, new String[] {"Shown", "Hidden"});
-    static final Choice[] CHOICES = {ACCENT, TILES, LAYOUT, POSITION, ORDER, ALL_APPS, LABELS, CLOCK, MEMORY, INPUTS, SWITCH, BACKGROUND, DIM, ROTATE, LOCK, TILE_STYLE, CHIPS, LIBRARY};
+    static final Choice[] CHOICES = {ACCENT, TILES, LAYOUT, POSITION, ORDER, ALL_APPS, LABELS, CLOCK, MEMORY, INPUTS, SWITCH, BACKGROUND, DIM, ROTATE, LOCK, TILE_STYLE, THEME, MOTION, BACKDROP, WATCH, DOCK_APPS, CLOCK_STYLE, GREETING, CHIPS, LIBRARY};
 
     /** Folder of wallpapers, next to home.conf, that Background › Image file rotates through. */
     static final String WALLPAPERS = "wallpapers";

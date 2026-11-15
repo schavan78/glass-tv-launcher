@@ -49,11 +49,16 @@ final class Ui {
 
     /** Accent fill when focused, a faint fill otherwise. */
     static void focusStyle(TextView v, int accent, int idle, float radius) {
+        focusStyle(v, accent, idle, radius, 0xD9FFFFFF);
+    }
+
+    /** As above, with {@code rest} as the text colour while not focused (dark on light glass). */
+    static void focusStyle(TextView v, int accent, int idle, float radius, int rest) {
         StateListDrawable bg = new StateListDrawable();
         bg.addState(new int[] {android.R.attr.state_focused}, round(accent, radius));
         bg.addState(new int[0], round(idle, radius));
         v.setBackground(bg);
-        v.setTextColor(focused(ink(accent), 0xD9FFFFFF));
+        v.setTextColor(focused(ink(accent), rest));
     }
 
     /**
@@ -61,7 +66,11 @@ final class Ui {
      * {@code mark} in the accent, both turning the ink colour on the accent fill when focused.
      */
     static Drawable chipIcon(Drawable shape, Drawable mark, int accent, int size) {
-        shape.mutate().setTintList(focused(ink(accent), 0xD9FFFFFF));
+        return chipIcon(shape, mark, accent, size, 0xD9FFFFFF);
+    }
+
+    static Drawable chipIcon(Drawable shape, Drawable mark, int accent, int size, int rest) {
+        shape.mutate().setTintList(focused(ink(accent), rest));
         mark.mutate().setTintList(focused(ink(accent), accent));
         LayerDrawable d = new LayerDrawable(new Drawable[] {shape, mark});
         d.setBounds(0, 0, size, size);

@@ -20,9 +20,31 @@ import java.util.Map;
 
 /** Where tiles come from, and which of them the user wants on the home screen. */
 final class Catalog {
-    static final String APPS = "apps", ALL_APPS = "allapps", INPUTS = "inputs";
+    static final String APPS = "apps", ALL_APPS = "allapps", INPUTS = "inputs", WATCH = "watch";
 
     private Catalog() {}
+
+    /**
+     * Hardware inputs (HDMI, AV, the tuner) get ids ending in /HW and a number (TvInputInfo.Builder);
+     * apps' live-channel services are tuner-type too, but never hardware.
+     */
+    /**
+     * The tuner tile's name when the TV gives none. It opens Fire TV's live player and guide,
+     * which hold the cable or antenna channels and every app's live channels, so "Live TV".
+     */
+    static final String CABLE = "Live TV";
+
+    static boolean isHardware(String inputId) {
+        return inputId != null && inputId.matches(".*/HW[0-9]+");
+    }
+
+    /** The TV's own tuner: a hardware input of tuner type (HDMI inputs are hardware too). */
+    static boolean isTuner(Context c, String inputId) {
+        if (!isHardware(inputId)) return false;
+        TvInputManager tv = (TvInputManager) c.getSystemService(Context.TV_INPUT_SERVICE);
+        TvInputInfo in = tv == null ? null : tv.getTvInputInfo(inputId);
+        return in != null && in.getType() == TvInputInfo.TYPE_TUNER;
+    }
 
     static boolean isApp(String kind) {
         return APPS.equals(kind) || ALL_APPS.equals(kind);
@@ -83,20 +105,29 @@ final class Catalog {
         List<Item> out = new ArrayList<>();
         if (tv == null) return out;
         List<Item> other = new ArrayList<>();
+        Item cable = null;
         for (TvInputInfo in : tv.getTvInputList()) {
-            if (!in.isPassthroughInput() || in.isHidden(c)) continue;
+            boolean tuner = in.getType() == TvInputInfo.TYPE_TUNER && isHardware(in.getId());
+            if (!in.isPassthroughInput() && !tuner || in.isHidden(c)) continue;
             CharSequence label = in.loadCustomLabel(c);
-            if (TextUtils.isEmpty(label)) label = in.loadLabel(c);
-            Intent view = new Intent(Intent.ACTION_VIEW,
-                    TvContract.buildChannelUriForPassthroughInput(in.getId()));
+            if (TextUtils.isEmpty(label)) label = tuner ? CABLE : in.loadLabel(c);
+            Intent view = new Intent(Intent.ACTION_VIEW, tuner
+                    ? TvContract.buildChannelsUriForInput(in.getId())
+                    : TvContract.buildChannelUriForPassthroughInput(in.getId()));
             Item it = new Item(in.getId(), label, view);
             it.state = tv.getInputState(in.getId());
-            (in.getType() == TvInputInfo.TYPE_HDMI ? out : other).add(it);
+            if (tuner) {
+                if (cable == null) cable = it;
+            } else {
+                (in.getType() == TvInputInfo.TYPE_HDMI ? out : other).add(it);
+            }
         }
         Collator collator = Collator.getInstance();
         Collections.sort(out, (a, b) -> collator.compare(a.label.toString(), b.label.toString()));
         Collections.sort(other, (a, b) -> collator.compare(a.label.toString(), b.label.toString()));
         out.addAll(other);
+        // The TV's own tuner first, as Fire TV's input list has it.
+        if (cable != null) out.add(0, cable);
         return out;
     }
 

@@ -44,12 +44,16 @@ public final class Input extends Activity {
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final AudioManager.OnAudioFocusChangeListener focus = change -> { };
+    private static final String PREFS = "tuner";
     private TvView view;
+    /** Cable TV only: the tuner's channels, the one showing and the one before it. */
+    private List<Channels.Channel> channels = new java.util.ArrayList<>();
+    private int index, previous;
     private TextView name, status;
     private String id;
     private final Runnable hideName = () -> name.animate().alpha(0f).setDuration(250)
             .withEndAction(() -> name.setVisibility(View.GONE)).start();
-    private final Runnable noSignal = () -> status(getString(NO_SIGNAL));
+    private final Runnable noSignal = () -> status(getString(noSignalText()));
 
     private final TvView.TvInputCallback watch = new TvView.TvInputCallback() {
         @Override
@@ -72,7 +76,7 @@ public final class Input extends Activity {
             // Tuning and buffering are on the way to a picture; everything else means none is coming.
             boolean pending = reason == TvInputManager.VIDEO_UNAVAILABLE_REASON_TUNING
                     || reason == TvInputManager.VIDEO_UNAVAILABLE_REASON_BUFFERING;
-            if (!pending) status(getString(NO_SIGNAL));
+            if (!pending) status(getString(noSignalText()));
         }
     };
 
@@ -81,12 +85,36 @@ public final class Input extends Activity {
      * passthrough URI: always for "tv" if one exists, and for "auto" only when a single app other
      * than Amazon's Live TV claims it.
      */
+    private static final String CHANNEL_ITEM = "vnd.android.cursor.item/channel";
+    /** No real channel has this id, so Fire TV's player resumes the last channel watched. */
+    private static final long ANY_CHANNEL = Integer.MAX_VALUE;
+
+    /**
+     * Fire TV's own live player and guide, for the TV's tuner. Fire OS hides every channel list
+     * from other apps and reserves its guide and tune links for Amazon's apps; the one door left
+     * open is "view this channel". Given a channel that does not exist, the player resumes the
+     * last channel watched (cable, antenna or an app's live channel), with the guide and channel
+     * up/down working as usual. Null when Amazon's Live TV is not there to take it.
+     */
+    static Intent liveTv(Context c) {
+        Intent i = new Intent(Intent.ACTION_VIEW)
+                .setDataAndType(TvContract.buildChannelUri(ANY_CHANNEL), CHANNEL_ITEM)
+                .setPackage(AMAZON_LIVE_TV);
+        return c.getPackageManager().resolveActivity(i, 0) == null ? null : i;
+    }
+
     static Intent intent(Context c, Config cfg, Item it, CharSequence name) {
+        if (Catalog.isTuner(c, it.id)) {
+            Intent live = liveTv(c);
+            if (live != null) return live;
+        }
         String mode = cfg.get(Config.SWITCH);
         List<ResolveInfo> apps = c.getPackageManager().queryIntentActivities(it.intent, 0);
         boolean handOver = "tv".equals(mode) ? !apps.isEmpty()
                 : "auto".equals(mode) && apps.size() == 1 && !viewerIsLiveTv(apps.get(0));
-        if (handOver) return null;
+        // Amazon's Live TV opens its settings instead of the tuner's channels, so the built-in
+        // tuner is always shown here, with channel up and down.
+        if (handOver && !Catalog.isTuner(c, it.id)) return null;
         return new Intent(c, Input.class).putExtra(EXTRA_ID, it.id).putExtra(EXTRA_NAME, name);
     }
 
@@ -140,7 +168,18 @@ public final class Input extends Activity {
         ((AudioManager) getSystemService(Context.AUDIO_SERVICE))
                 .requestAudioFocus(focus, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
         view.setStreamVolume(1f);
-        view.tune(id, TvContract.buildChannelUriForPassthroughInput(id));
+        if (Catalog.isTuner(this, id)) channels = Channels.load(this, id);
+        if (!channels.isEmpty()) {
+            long last = getSharedPreferences(PREFS, MODE_PRIVATE).getLong(id, -1);
+            index = 0;
+            for (int i = 0; i < channels.size(); i++) if (channels.get(i).id == last) index = i;
+            tuneChannel(false);
+        } else {
+            // HDMI, or a tuner whose channel list Fire OS keeps to itself: the tuner then plays
+            // its own current channel and takes channel up/down itself (keys reach its session
+            // through the focused TvView).
+            view.tune(id, TvContract.buildChannelUriForPassthroughInput(id));
+        }
         view.requestFocus();
         // Most input services report why there is no picture; this covers one that stays silent.
         ui.postDelayed(noSignal, SIGNAL_MS);
@@ -170,9 +209,46 @@ public final class Input extends Activity {
             case KeyEvent.KEYCODE_INFO:
                 if (e.getAction() == KeyEvent.ACTION_DOWN) showName();
                 return true;
+            case KeyEvent.KEYCODE_CHANNEL_UP:
+            case KeyEvent.KEYCODE_DPAD_UP:
+            case KeyEvent.KEYCODE_CHANNEL_DOWN:
+            case KeyEvent.KEYCODE_DPAD_DOWN:
+            case KeyEvent.KEYCODE_LAST_CHANNEL:
+                if (channels.isEmpty()) return super.dispatchKeyEvent(e);
+                if (e.getAction() == KeyEvent.ACTION_DOWN) {
+                    int code = e.getKeyCode();
+                    if (code == KeyEvent.KEYCODE_LAST_CHANNEL) {
+                        int back = previous;
+                        previous = index;
+                        index = back;
+                    } else {
+                        int step = code == KeyEvent.KEYCODE_CHANNEL_UP || code == KeyEvent.KEYCODE_DPAD_UP ? 1 : -1;
+                        previous = index;
+                        index = (index + step + channels.size()) % channels.size();
+                    }
+                    tuneChannel(true);
+                }
+                return true;
             default:
                 return super.dispatchKeyEvent(e);
         }
+    }
+
+    /** Tunes the channel at {@link #index}, shows its number and name, and remembers it. */
+    private void tuneChannel(boolean remember) {
+        Channels.Channel ch = channels.get(index);
+        status(null);
+        view.tune(id, TvContract.buildChannelUri(ch.id));
+        name.setText(ch.title());
+        showName();
+        ui.removeCallbacks(noSignal);
+        ui.postDelayed(noSignal, SIGNAL_MS);
+        if (remember) getSharedPreferences(PREFS, MODE_PRIVATE).edit().putLong(id, ch.id).apply();
+    }
+
+    /** For Cable TV the likely reason is an unscanned tuner, so say where the scan is. */
+    private int noSignalText() {
+        return Catalog.isTuner(this, id) && channels.isEmpty() ? R.string.input_no_signal_tuner : NO_SIGNAL;
     }
 
     private void showName() {

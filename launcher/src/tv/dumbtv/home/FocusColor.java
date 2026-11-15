@@ -33,6 +33,39 @@ final class FocusColor {
         }
     }
 
+    /** Whether {@code art} is one flat colour with nothing on it (a banner with no logo). */
+    static boolean blank(Drawable art) {
+        if (art == null || art.getConstantState() == null) return false;
+        Bitmap bitmap = null;
+        try {
+            Drawable copy = art.getConstantState().newDrawable().mutate();
+            bitmap = Bitmap.createBitmap(32, 18, Bitmap.Config.ARGB_8888);
+            copy.setBounds(0, 0, 32, 18);
+            copy.draw(new Canvas(bitmap));
+            int[] px = new int[32 * 18];
+            bitmap.getPixels(px, 0, 32, 0, 0, 32, 18);
+            return flat(px);
+        } catch (RuntimeException ignored) {
+            return false;
+        } finally {
+            if (bitmap != null) bitmap.recycle();
+        }
+    }
+
+    /** No channel of any opaque pixel strays more than a little from the first one's. */
+    static boolean flat(int[] px) {
+        int base = -1, seen = 0;
+        for (int p : px) {
+            if ((p >>> 24) < 128) continue;
+            if (base == -1) base = p;
+            seen++;
+            for (int shift = 0; shift <= 16; shift += 8) {
+                if (Math.abs(((p >> shift) & 255) - ((base >> shift) & 255)) > 18) return false;
+            }
+        }
+        return seen > 0;
+    }
+
     /** Hue groups favor useful colored regions over a large neutral icon background. */
     static int representative(int[] pixels) {
         float[] weights = new float[12];

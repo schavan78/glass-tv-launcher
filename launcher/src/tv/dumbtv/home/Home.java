@@ -13,7 +13,10 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Rect;
+import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.TransitionDrawable;
 import android.media.tv.TvInputManager;
 import android.net.Uri;
 import android.os.Bundle;
@@ -75,9 +78,26 @@ public final class Home extends Activity {
     private View shade;
     private View tint;
     private LinearLayout head;
-    private TextView clock, date;
+    private TextView clock, date, greeting;
+    private LinearLayout whenBox;
+    private View balance;
     private Meter meter;
-    private Row apps, allApps, inputs;
+    private Row apps, allApps, inputs, watch;
+    private Motion motion;
+    /** Options › Focus backdrop: the selected app's art, blurred, between the wallpaper and the dim. */
+    private ImageView back;
+    private TextView callout;
+    private Dock dockFx;
+    private Spot spot;
+    private ValueAnimator backAnim;
+    private Item backItem;
+    private Runnable backJob;
+    private float wallLuminance;
+    private String frostKey;
+    private boolean wallReleased;
+    /** What the Continue Watching row last showed, to skip a rebuild that would move the focus. */
+    private String watchShown = "";
+    private int wallGeneration;
     private Hero hero;
     /** Options › Home position › Bottom: the empty stretch between the clock and the rows. */
     private View spacer;
@@ -149,6 +169,7 @@ public final class Home extends Activity {
         final HorizontalScrollView scroll;
         final LinearLayout strip;
         final Grid grid;
+        FrameLayout.LayoutParams stripLp;
         List<Item> all = new ArrayList<>();
 
         Row(String kind, String name, LinearLayout parent) {
@@ -163,22 +184,33 @@ public final class Home extends Activity {
             strip.setClipToPadding(false);
             strip.setPadding(bleed, dp(12), bleed, dp(8));
             scroll = new HorizontalScrollView(Home.this) {
-                /** Keeps the focused tile centered, except near either end of the row. */
+                /**
+                 * Scrolls only as far as the focused tile needs, with a margin so the next tile
+                 * peeks in, as on Apple TV: a row that starts at its first tile stays there
+                 * until the focus nears the right edge, instead of re-centring on every move.
+                 */
                 @Override
                 protected int computeScrollDeltaToGetChildRectOnScreen(Rect r) {
                     if (getChildCount() == 0) return 0;
-                    int range = Math.max(0, getChildAt(0).getWidth() - (getWidth() - getPaddingLeft() - getPaddingRight()));
-                    int target = Math.max(0, Math.min(range, r.centerX() - getWidth() / 2));
-                    return target - getScrollX();
+                    int view = getWidth() - getPaddingLeft() - getPaddingRight();
+                    int range = Math.max(0, getChildAt(0).getWidth() - view);
+                    int margin = Math.min(view / 4, r.width() / 2 + dp(24));
+                    int x = getScrollX(), target = x;
+                    if (r.left - margin < x) target = r.left - margin;
+                    else if (r.right + margin > x + view) target = r.right + margin - view;
+                    target = Math.max(0, Math.min(range, target));
+                    return target - x;
                 }
             };
             scroll.setFocusable(false);
+            scroll.setOnScrollChangeListener((v, x, y, ox, oy) -> glassMoved());
             scroll.setHorizontalScrollBarEnabled(false);
             scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
             scroll.setClipChildren(false);
             scroll.setClipToPadding(false);
             scroll.setPadding(edge - bleed, 0, edge - bleed, 0);
-            scroll.addView(strip, new FrameLayout.LayoutParams(WRAP, WRAP));
+            stripLp = new FrameLayout.LayoutParams(WRAP, WRAP);
+            scroll.addView(strip, stripLp);
             grid = new Grid(Home.this);
             grid.setPadding(edge, dp(12), edge, dp(8));
             parent.addView(title, new LinearLayout.LayoutParams(MATCH, WRAP));
@@ -202,6 +234,7 @@ public final class Home extends Activity {
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+        Recover.install(this);
         Future<List<Item>> catalog = io.submit(() -> Catalog.apps(this));
         cfg = Config.get(this);
         Future<Map<String, Long>> times = recentFor(Catalog.APPS) == null ? null
@@ -249,7 +282,7 @@ public final class Home extends Activity {
             return;
         }
         int fit = getResources().getDisplayMetrics().widthPixels / (cardSize()[0] + dp(18)) + 1;
-        boolean cornerIcon = "afterglow".equals(cfg.get(Config.TILE_STYLE));
+        boolean cornerIcon = wantsIcon();
         List<Item> first = new ArrayList<>();
         List<Runnable> jobs = new ArrayList<>();
         // A chosen icon pack is read by parsing its whole appfilter; the first frame does not wait
@@ -282,7 +315,15 @@ public final class Home extends Activity {
     private Runnable artJob(Item it, boolean cornerIcon) {
         String pack = cfg.get(IconPack.KEY, IconPack.OFF);
         String chosen = cfg.get(IconPack.CHOSEN + it.id, null);
-        return () -> Catalog.art(getPackageManager(), it, cornerIcon, replacementArt(it, chosen, pack));
+        return () -> {
+            Catalog.art(getPackageManager(), it, cornerIcon, replacementArt(it, chosen, pack));
+            // Some apps ship a banner that is only a plain background (FireTV Troubleshooting:
+            // all orange): show their icon instead, so the tile says what it is.
+            if (it.banner != null && FocusColor.blank(it.banner)) {
+                it.banner = null;
+                if (it.icon == null && it.info != null) it.icon = it.info.loadIcon(getPackageManager());
+            }
+        };
     }
 
     /**
@@ -323,6 +364,8 @@ public final class Home extends Activity {
         else background();
         refreshRecent();
         loadLibrary();
+        loadWatch();
+        if (wallKey != null && "on".equals(cfg.get(Config.MOTION))) motion.start();
         hero.start();
         IntentFilter f = new IntentFilter(Intent.ACTION_TIME_TICK);
         f.addAction(Intent.ACTION_TIME_CHANGED);
@@ -342,10 +385,32 @@ public final class Home extends Activity {
         resumed = false;
         inFront = false;
         hero.stop();
+        motion.stop();
         stopColorAnimation();
         targetColor = 0;
         unregisterReceiver(time);
         if (moving != null) stopMoving();
+    }
+
+    /**
+     * An app is in front: the sharp wallpaper (8 MB at 1080p) is let go and decoded again on the
+     * way back, with the blurred frost shown meanwhile, so it comes into focus instead of popping.
+     */
+    @Override
+    protected void onStop() {
+        super.onStop();
+        if (isChangingConfigurations()) return;
+        motion.stop();
+        wall.setImageDrawable(null);
+        // wallKey stays: it is what the frost, tone and Focus effect were made for. Only the
+        // sharp picture is gone, and background() decodes it again on the way back.
+        wallReleased = true;
+        // Bitmap memory is only handed back when the collector runs, and this app makes so little
+        // Java garbage that it may not run for minutes. Once the render thread has dropped its
+        // last frame, ask for a collection so the 8 MB really goes back while the app plays.
+        ui.postDelayed(() -> {
+            if (!resumed) Runtime.getRuntime().gc();
+        }, 1500);
     }
 
     @Override
@@ -378,6 +443,24 @@ public final class Home extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         if (moving != null) stopMoving();
+        if (intent.getBooleanExtra(Panel.FOCUS_INPUTS, false) && dock()) {
+            ui.postDelayed(() -> {
+                ViewGroup s = apps.strip;
+                View last = s.getChildCount() > 0 ? s.getChildAt(s.getChildCount() - 1) : null;
+                if (last != null) {
+                    last.requestFocus();
+                    showInputs(last);
+                }
+            }, 150);
+            return;
+        }
+        if (intent.getBooleanExtra(Panel.FOCUS_INPUTS, false)) {
+            ui.postDelayed(() -> {
+                View first = inputs.tiles().getChildCount() > 0 ? inputs.tiles().getChildAt(0) : null;
+                if (first != null) first.requestFocus();
+            }, 150);
+            return;
+        }
         if (resumed) focusFirst();
     }
 
@@ -518,10 +601,17 @@ public final class Home extends Activity {
         wall = new ImageView(this);
         wall.setScaleType(ImageView.ScaleType.CENTER_CROP);
         root.addView(wall, new FrameLayout.LayoutParams(MATCH, MATCH));
+        motion = new Motion(wall, this::glassMoved, dp(28));
+        back = new ImageView(this);
+        back.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        back.setAlpha(0f);
+        root.addView(back, new FrameLayout.LayoutParams(MATCH, MATCH));
         shade = new View(this);
         root.addView(shade, new FrameLayout.LayoutParams(MATCH, MATCH));
         tint = new View(this);
         root.addView(tint, new FrameLayout.LayoutParams(MATCH, MATCH));
+        spot = new Spot(this);
+        root.addView(spot, new FrameLayout.LayoutParams(MATCH, MATCH));
 
         ScrollView scroll = new ScrollView(this) {
             /** Scrolls in whole rows: the focused row shows complete, and a row starts at the top edge. */
@@ -559,7 +649,10 @@ public final class Home extends Activity {
         scroll.setVerticalScrollBarEnabled(false);
         scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
         scroll.setClipChildren(false);
+        scroll.setOnScrollChangeListener((v, x, y, ox, oy) -> glassMoved());
         root.addView(scroll, new FrameLayout.LayoutParams(MATCH, MATCH));
+        callout = Dock.callout(this);
+        root.addView(callout, new FrameLayout.LayoutParams(WRAP, WRAP));
 
         LinearLayout column = new LinearLayout(this) {
             @Override
@@ -580,6 +673,14 @@ public final class Home extends Activity {
                         View below = nearest(row.tiles(), focused);
                         if (below != null) return below;
                     }
+                }
+                if (dock() && focused.getParent() == apps.strip
+                        && (direction == View.FOCUS_LEFT || direction == View.FOCUS_RIGHT)) {
+                    int idx = apps.strip.indexOfChild(focused);
+                    int last = apps.strip.getChildCount() - 1;
+                    if (direction == View.FOCUS_LEFT && idx == 0) return focused;
+                    if (direction == View.FOCUS_RIGHT && idx == last) return focused;
+                    return apps.strip.getChildAt(direction == View.FOCUS_LEFT ? idx - 1 : idx + 1);
                 }
                 if (focused instanceof Tile
                         && focused.getParent() instanceof ViewGroup) {
@@ -656,11 +757,24 @@ public final class Home extends Activity {
         head.setPadding(dp(56), 0, dp(56), dp(12));
         LinearLayout when = new LinearLayout(this);
         when.setOrientation(LinearLayout.VERTICAL);
+        whenBox = when;
+        // Balances the chips on the right, so the dock's big clock sits in the true center.
+        balance = new View(this);
+        balance.setVisibility(View.GONE);
+        head.addView(balance, new LinearLayout.LayoutParams(0, 1));
         clock = Ui.text(this, 52, Ui.TEXT, Ui.LIGHT);
         date = Ui.text(this, 15, Ui.MUTED, Ui.MEDIUM);
         date.setPadding(dp(2), dp(8), 0, 0);
+        greeting = Ui.text(this, 20, Ui.TEXT, Ui.MEDIUM);
+        greeting.setVisibility(View.GONE);
+        greeting.setPadding(0, 0, 0, dp(2));
+        when.addView(greeting);
         when.addView(clock);
         when.addView(date);
+        // The glass clock's light runs top to bottom of the digits, so it follows their height.
+        clock.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+            if (b - t != ob - ot) styleClock();
+        });
         meter = new Meter(this);
         meter.setWords(getString(R.string.meter_title), getString(R.string.meter_free),
                 getString(R.string.meter_low));
@@ -670,6 +784,8 @@ public final class Home extends Activity {
         under.leftMargin = dp(2);
         when.addView(meter, under);
         head.addView(when, new LinearLayout.LayoutParams(0, WRAP, 1f));
+        head.addView(chip(getString(R.string.control_panel), R.drawable.chip_panel, R.drawable.chip_panel_mark,
+                v -> startActivity(new Intent(this, Panel.class))));
         head.addView(chip(getString(R.string.options), R.drawable.chip_options, R.drawable.chip_options_mark,
                 v -> startActivity(new Intent(this, Options.class))));
         head.addView(chip(getString(R.string.settings), R.drawable.chip_settings, R.drawable.chip_settings_mark,
@@ -685,7 +801,11 @@ public final class Home extends Activity {
         hero = new Hero(this, ui, io);
         hero.setOnClickListener(v -> hero.openCurrent());
         hero.setOnFocusChangeListener((v, has) -> {
-            if (has) focusBackground(null);
+            if (has) {
+                focusBackground(null);
+                focusBackdrop(null);
+                dockFx.reset();
+            }
         });
         LinearLayout.LayoutParams heroLp = new LinearLayout.LayoutParams(MATCH, dp(220));
         heroLp.leftMargin = dp(56);
@@ -695,6 +815,9 @@ public final class Home extends Activity {
         this.column = column;
 
         apps = new Row(Catalog.APPS, getString(R.string.row_apps), column);
+        dockFx = new Dock(apps.strip, callout, dp(10));
+        watch = new Row(Catalog.WATCH, getString(R.string.row_watch), column);
+        watch.setVisible(false);
         allApps = new Row(Catalog.ALL_APPS, getString(R.string.row_all_apps), column);
         allApps.setVisible(false);
         inputs = new Row(Catalog.INPUTS, getString(R.string.row_inputs), column);
@@ -756,7 +879,12 @@ public final class Home extends Activity {
     }
 
     private boolean atBottom() {
-        return "bottom".equals(cfg.get(Config.POSITION));
+        return "bottom".equals(cfg.get(Config.POSITION)) || dock();
+    }
+
+    /** Options › Layout › Dock: a big clock, and the apps as icons in a glass dock at the bottom. */
+    private boolean dock() {
+        return "dock".equals(cfg.get(Config.LAYOUT));
     }
 
     /**
@@ -776,7 +904,11 @@ public final class Home extends Activity {
         v.setOnFocusChangeListener((view, has) -> {
             chipLook(v, has);
             view.animate().scaleX(has ? 1.06f : 1f).scaleY(has ? 1.06f : 1f).setDuration(110).start();
-            if (has) focusBackground(null);
+            if (has) {
+                focusBackground(null);
+                focusBackdrop(null);
+                dockFx.reset();
+            }
         });
         chipLook(v, false);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(WRAP, WRAP);
@@ -827,10 +959,13 @@ public final class Home extends Activity {
             artState = state;
             for (Item it : apps.all) it.artRequested = false;
         }
+        layoutForDock();
         render(apps);
+        render(watch);
         render(allApps);
         render(inputs);
         background();
+        applyInk();
         tick();
     }
 
@@ -914,12 +1049,30 @@ public final class Home extends Activity {
         row.strip.removeAllViews();
         row.grid.removeAllViews();
 
-        boolean enabled = !Catalog.INPUTS.equals(row.kind) || "on".equals(cfg.get(Config.INPUTS));
+        boolean enabled = (!Catalog.INPUTS.equals(row.kind) || "on".equals(cfg.get(Config.INPUTS)))
+                && (row != watch || "on".equals(cfg.get(Config.WATCH)))
+                // The dock screen is the clock and the dock: inputs are its last icon.
+                && !(dock() && (row == inputs || row == watch || row == allApps));
         List<Item> shown = enabled ? Catalog.visible(cfg, row.kind,
                 row == allApps ? apps.all : row.all, recentFor(row.kind))
                 : new ArrayList<>();
+        // Dock › Apps in the dock: the first ones stay, the rest go behind the ••• icon.
+        List<Item> more = new ArrayList<>();
+        int inDock = row == apps && dock() ? dockKeep() : Integer.MAX_VALUE;
+        // (inDock + 1 would wrap round for "all"; a folder of one app is no folder)
+        if (inDock != Integer.MAX_VALUE && shown.size() > inDock + 1) {
+            more = new ArrayList<>(shown.subList(inDock, shown.size()));
+            shown = new ArrayList<>(shown.subList(0, inDock));
+        }
+        dockMore = row == apps ? more : dockMore;
         int[] size = cardSize();
         int w = size[0], h = Catalog.isApp(row.kind) ? size[1] : Math.round(size[1] * 0.56f);
+        if (row == watch) {
+            w = Math.round(size[0] * 1.3f);
+            h = w * 9 / 16;
+        } else if (row == apps && dock()) {
+            w = h = dockSize();
+        }
         String labels = cfg.get(Config.LABELS);
         int accent = cfg.accent();
         int index = 0, restore = -1;
@@ -932,6 +1085,9 @@ public final class Home extends Activity {
                     lastFocusedKind = tile.kind;
                     lastIds.put(tile.kind, tile.item.id);
                     focusBackground(tile.item);
+                    focusBackdrop(Catalog.isApp(tile.kind) ? tile : null);
+                    if (dock() && row == apps) dockFx.focus(tile, Catalog.label(cfg, tile.item));
+                    else dockFx.reset();
                 }
             });
             t.setOnLongClickListener(v -> {
@@ -942,15 +1098,28 @@ public final class Home extends Activity {
                 target.addView(t, new ViewGroup.LayoutParams(WRAP, WRAP));
             } else {
                 LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(WRAP, WRAP);
-                lp.rightMargin = dp(18);
+                lp.rightMargin = dock() && row == apps ? dp(14) : dp(18);
                 target.addView(t, lp);
             }
             if (it.id.equals(keep)) restore = index;
             index++;
             if (Catalog.isApp(row.kind) && (!it.artRequested
-                    || "afterglow".equals(cfg.get(Config.TILE_STYLE)) && it.icon == null)) loadArt(it);
+                    || wantsIcon() && it.icon == null)) loadArt(it);
+        }
+        if (row == apps && dock() && !more.isEmpty()) {
+            LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(w, w);
+            mlp.rightMargin = dp(14);
+            target.addView(dockButton(w, Glyph.MORE, getString(R.string.more_apps), this::showMore), mlp);
+        }
+        if (row == apps && dock() && "on".equals(cfg.get(Config.INPUTS))) {
+            target.addView(inputsButton(w), new LinearLayout.LayoutParams(w, w));
+        }
+        if (row == apps && dock()) {
+            int end = Math.round(w * DOCK_ENDS);
+            apps.strip.setPadding(end, dp(12), end, dp(12));
         }
         row.setVisible(!shown.isEmpty());
+        if (row == apps && dock()) apps.title.setVisibility(View.GONE);
         adjustAppRowPosition();
         if (shown.isEmpty()) {
             // Nothing is left to come back to: forget the tile that used to be here.
@@ -1013,7 +1182,7 @@ public final class Home extends Activity {
 
     private void loadArt(Item it) {
         it.artRequested = true;
-        Runnable job = artJob(it, "afterglow".equals(cfg.get(Config.TILE_STYLE)));
+        Runnable job = artJob(it, wantsIcon());
         io.execute(() -> {
             job.run();
             ui.post(() -> {
@@ -1074,6 +1243,84 @@ public final class Home extends Activity {
         }
     }
 
+    /** The dock's icon tiles: square, a little bigger than the small banner tiles are tall. */
+    private int dockSize() {
+        int wanted;
+        switch (cfg.get(Config.TILES)) {
+            case "small":
+                wanted = dp(72);
+                break;
+            case "large":
+                wanted = dp(104);
+                break;
+            default:
+                wanted = dp(88);
+        }
+        // Every app fits on the screen, as in a macOS dock: the icons shrink rather than run off
+        // the edge. Room for the Inputs icon, the bar's padding, and the magnified ends.
+        int count = Math.min(Catalog.visible(cfg, Catalog.APPS, apps.all, recentFor(Catalog.APPS)).size(),
+                dockKeep() == Integer.MAX_VALUE ? Integer.MAX_VALUE : dockKeep() + 1) + 1;
+        // count icons and gaps, plus half an icon at each end for the magnified icons to grow into
+        int room = getResources().getDisplayMetrics().widthPixels - dp(64) - count * dp(12);
+        int fit = Math.round(room / (count + DOCK_ENDS * 2));
+        return Math.max(dp(40), Math.min(wanted, fit));
+    }
+
+    /**
+     * Lays the home screen out for the dock or for rows: the clock's size and place, the apps
+     * row's title, frame and centering. Called from apply(), before the rows are drawn.
+     */
+    private void layoutForDock() {
+        boolean on = dock();
+        clock.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, on ? 112 : 52);
+        date.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, on ? 19 : 15);
+        whenBox.setGravity(on ? Gravity.CENTER_HORIZONTAL : Gravity.START);
+        // The clock and date fill the box's width, so their own text is centred too.
+        clock.setGravity(on ? Gravity.CENTER_HORIZONTAL : Gravity.START);
+        date.setGravity(on ? Gravity.CENTER_HORIZONTAL : Gravity.START);
+        // In the dock the date sits above the clock, as on tvOS and iOS.
+        whenBox.removeView(date);
+        whenBox.addView(date, on ? 1 : 2); // greeting, date, clock in the dock; clock, date in rows
+        greeting.setGravity(on ? Gravity.CENTER_HORIZONTAL : Gravity.START);
+        greeting.setVisibility(on && "on".equals(cfg.get(Config.GREETING)) ? View.VISIBLE : View.GONE);
+        date.setPadding(dp(2), on ? 0 : dp(8), 0, on ? dp(2) : 0);
+        balance.setVisibility(on ? View.VISIBLE : View.GONE);
+        if (!balancing) {
+            balancing = true;
+            head.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> balanceChips());
+        }
+        head.post(this::balanceChips);
+        apps.title.setVisibility(on ? View.GONE : apps.title.getVisibility());
+        apps.stripLp.gravity = on ? Gravity.CENTER_HORIZONTAL : Gravity.START;
+        apps.strip.setLayoutParams(apps.stripLp);
+        apps.strip.setPadding(on ? dp(16) : dp(14), on ? dp(12) : dp(12), on ? dp(4) : dp(14),
+                on ? dp(12) : dp(8));
+        apps.strip.setBackground(on ? new DockBar(apps.strip, dp(26)) : null);
+        apps.strip.setElevation(on ? dp(10) : 0);
+        apps.scroll.setPadding(on ? dp(24) : dp(56) - dp(14), on ? dp(80) : 0,
+                on ? dp(24) : dp(56) - dp(14), on ? dp(28) : 0);
+    }
+
+    private boolean balancing;
+    /** Each end of the dock bar leaves this many icon widths for magnified icons to grow into. */
+    private static final float DOCK_ENDS = 0.55f;
+
+    /** Sets the left spacer to the chips' width, so the dock's clock is centred on the screen. */
+    private void balanceChips() {
+        if (balance.getVisibility() != View.VISIBLE) return;
+        int w = 0;
+        for (TextView c : chips) {
+            if (c.getVisibility() != View.VISIBLE) continue;
+            ViewGroup.MarginLayoutParams m = (ViewGroup.MarginLayoutParams) c.getLayoutParams();
+            w += c.getWidth() + m.leftMargin + m.rightMargin;
+        }
+        ViewGroup.LayoutParams lp = balance.getLayoutParams();
+        if (w > 0 && lp.width != w) {
+            lp.width = w;
+            balance.setLayoutParams(lp);
+        }
+    }
+
     private int[] cardSize() {
         switch (cfg.get(Config.TILES)) {
             case "small":
@@ -1118,7 +1365,7 @@ public final class Home extends Activity {
     }
 
     private Row[] rows() {
-        return new Row[] {apps, allApps, inputs};
+        return new Row[] {apps, watch, allApps, inputs};
     }
 
     private Row row(String kind) {
@@ -1167,6 +1414,9 @@ public final class Home extends Activity {
             clock.setText(DateFormat.format("h:mm", now));
             clock.append(half);
         }
+        int hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
+        greeting.setText(hour >= 5 && hour < 12 ? R.string.greet_morning : hour >= 12 && hour < 17
+                ? R.string.greet_afternoon : hour >= 17 && hour < 22 ? R.string.greet_evening : R.string.greet_night);
         Locale locale = Locale.getDefault();
         date.setText(DateFormat.format(DateFormat.getBestDateTimePattern(locale, "EEEEdMMMM"), now));
         if (meter.getVisibility() == View.VISIBLE) {
@@ -1208,20 +1458,417 @@ public final class Home extends Activity {
             tint.setBackgroundColor(Color.TRANSPARENT);
             root.setBackgroundColor(cfg.background());
         }
-        int dim = Integer.parseInt(cfg.get(Config.DIM));
-        shade.setBackgroundColor(file == null ? Color.TRANSPARENT : Color.argb(dim * 255 / 100, 0, 0, 0));
         String key = file == null ? null : file.getPath() + ":" + file.lastModified();
-        if (key == null ? wallKey == null : key.equals(wallKey)) return;
+        boolean same = (key == null ? wallKey == null : key.equals(wallKey))
+                && !(key != null && wallReleased);
         wallKey = key;
+        wallReleased = false;
+        shade();
+        if (same) return;
+        int generation = ++wallGeneration;
         if (file == null) {
             wall.setImageDrawable(null);
+            Glass.set(null);
+            frostKey = null;
+            wallLuminance = 0f;
+            focusBackdrop(null);
+            motion.reset();
+            setTone(0f);
             return;
         }
+        int sw = getResources().getDisplayMetrics().widthPixels;
+        int sh = getResources().getDisplayMetrics().heightPixels;
+        boolean sameFrost = key.equals(frostKey) && Glass.frost() != null;
+        if (sameFrost && wall.getDrawable() == null) wall.setImageBitmap(Glass.frost());
         io.execute(() -> {
-            Bitmap b = decode(file, getResources().getDisplayMetrics().widthPixels,
-                    getResources().getDisplayMetrics().heightPixels);
+            Bitmap b = decode(file, sw, sh);
+            Glass.Frost frost = sameFrost ? null : Glass.prepare(b, sw, sh);
             ui.post(() -> {
-                if (key.equals(wallKey)) wall.setImageBitmap(b);
+                if (generation != wallGeneration || isDestroyed()) return;
+                showWallpaper(b);
+                if (!sameFrost) {
+                    Glass.set(frost);
+                    frostKey = key;
+                    wallLuminance = frost == null ? 0f : frost.luminance;
+                }
+                setTone(mixedLuminance());
+                if (resumed && "on".equals(cfg.get(Config.MOTION))) motion.start();
+                else if (!"on".equals(cfg.get(Config.MOTION))) motion.reset();
+            });
+        });
+    }
+
+    /** A new picture fades in over the old one instead of cutting to it. */
+    private void showWallpaper(Bitmap b) {
+        Drawable old = wall.getDrawable();
+        if (b == null || old == null || !resumed) {
+            wall.setImageBitmap(b);
+            return;
+        }
+        TransitionDrawable fade = new TransitionDrawable(new Drawable[] {old, new BitmapDrawable(getResources(), b)});
+        fade.setCrossFadeEnabled(true);
+        wall.setImageDrawable(fade);
+        // From the frost placeholder: a quick focus pull. From another picture: a slow fade.
+        boolean placeholder = old instanceof BitmapDrawable && ((BitmapDrawable) old).getBitmap() == Glass.frost();
+        int ms = placeholder ? 350 : 900;
+        fade.startTransition(ms);
+        // Keep only the new picture once the fade is done, so the old one can be freed.
+        ui.postDelayed(() -> {
+            if (wall.getDrawable() == fade) wall.setImageBitmap(b);
+        }, ms + 50);
+    }
+
+    /**
+     * The dim over a picture. With frosted glass it is a wash that deepens towards the bottom,
+     * dark or light to match the ink, so the tiles stand out as in a printed poster; otherwise
+     * dumbtv's even dim.
+     */
+    private void shade() {
+        int dim = Integer.parseInt(cfg.get(Config.DIM));
+        if (wallKey == null) {
+            shade.setBackgroundColor(Color.TRANSPARENT);
+            return;
+        }
+        if (!Glass.on(cfg)) {
+            shade.setBackgroundColor(Color.argb(dim * 255 / 100, 0, 0, 0));
+            return;
+        }
+        int a = dim * 255 / 100;
+        int rgb = Glass.light() ? 0xFFFFFF : 0x000000;
+        // At least as strong as the text needs over this picture (white text on snow, say).
+        int need = Math.round(Tone.scrim(wallLuminance, Glass.light()) * 255);
+        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[] {
+            Math.max(a / 3, need) << 24 | rgb, Math.max(a * 2 / 3, need) << 24 | rgb,
+            Math.min(255, Math.max(a + 70, need)) << 24 | rgb,
+        });
+        shade.setBackground(g);
+    }
+
+    /** Picks light or dark ink from the picture's brightness, or from Options › Text and glass. */
+    private void setTone(float luminance) {
+        String theme = cfg.get(Config.THEME);
+        boolean was = Glass.light();
+        // Light glass only over a picture: every solid background (black, graphite, midnight and
+        // the adaptive colours) is dark, and dark text on it would vanish.
+        boolean light = wallKey != null && ("light".equals(theme)
+                || "auto".equals(theme) && Tone.light(luminance, was));
+        if (light == was && Glass.on(cfg) == lastGlass) {
+            shade(); // the picture may have changed under the same ink
+            glassMoved();
+            return;
+        }
+        Glass.setLight(light);
+        lastGlass = Glass.on(cfg);
+        shade();
+        applyInk();
+    }
+
+    private boolean lastGlass;
+
+    /** Clock, date, row titles and chips in the ink of {@link Glass#light}. */
+    private void applyInk() {
+        boolean light = Glass.on(cfg) && Glass.light();
+        int text = light ? 0xFF16171A : Ui.TEXT;
+        fadeText(clock, text);
+        fadeText(date, light ? 0xB3000000 : Ui.MUTED);
+        fadeText(greeting, light ? 0xE6000000 : 0xF2FFFFFF);
+        greeting.setShadowLayer(dp(8), 0, dp(1), light ? 0x73FFFFFF : 0x8C000000);
+        float r = dp(10);
+        int halo = light ? 0x73FFFFFF : 0x8C000000;
+        Dock.ink(callout, light);
+        styleClock();
+        clock.setShadowLayer(r, 0, dp(1), halo);
+        date.setShadowLayer(r, 0, dp(1), halo);
+        for (Row row : rows()) {
+            fadeText(row.title, light ? 0x99000000 : Ui.FAINT);
+            row.title.setShadowLayer(dp(6), 0, dp(1), halo);
+        }
+        int accent = cfg.accent();
+        boolean icons = iconChips();
+        int rest = light ? 0xD9000000 : 0xD9FFFFFF;
+        int idle = light ? 0x59FFFFFF : 0x14FFFFFF;
+        for (TextView c : chips) {
+            Ui.focusStyle(c, accent, idle, dp(icons ? 21 : 18), rest);
+            int[] art = (int[]) c.getTag();
+            c.setCompoundDrawablesRelative(icons ? Ui.chipIcon(getDrawable(art[0]), getDrawable(art[1]),
+                    accent, dp(22), rest) : null, null, null, null);
+        }
+        glassMoved();
+    }
+
+    /**
+     * Options › Clock style › Glass: the digits are lit from above, bright at the top and fading
+     * towards the bottom like frosted glass, with a soft glow under them. Plain is one colour.
+     */
+    private void styleClock() {
+        if (clock == null) return;
+        boolean glass = "glass".equals(cfg.get(Config.CLOCK_STYLE));
+        boolean light = Glass.on(cfg) && Glass.light();
+        int h = clock.getHeight();
+        if (!glass || h == 0) {
+            clock.getPaint().setShader(null);
+        } else {
+            int top = light ? 0xF2202227 : 0xFFFFFFFF, bottom = light ? 0x99202227 : 0x8CFFFFFF;
+            clock.getPaint().setShader(new android.graphics.LinearGradient(0, h * 0.15f, 0, h * 0.9f,
+                    top, bottom, android.graphics.Shader.TileMode.CLAMP));
+        }
+        float glow = glass ? dp(16) : dp(10);
+        clock.setShadowLayer(glow, 0, glass ? dp(3) : dp(1), light ? 0x80FFFFFF : glass ? 0x66000000 : 0x8C000000);
+        clock.invalidate();
+    }
+
+    /** Changes a text colour over a third of a second instead of snapping (a backdrop fades too). */
+    private void fadeText(TextView v, int to) {
+        int from = v.getCurrentTextColor();
+        if (from == to) return;
+        Object running = v.getTag(R.id.ink_fade);
+        if (running instanceof ValueAnimator) ((ValueAnimator) running).cancel();
+        if (!resumed) {
+            v.setTextColor(to);
+            return;
+        }
+        ValueAnimator a = ValueAnimator.ofArgb(from, to);
+        a.setDuration(320);
+        a.addUpdateListener(x -> v.setTextColor((Integer) x.getAnimatedValue()));
+        v.setTag(R.id.ink_fade, a);
+        a.start();
+    }
+
+    /** The glass tiles show what is behind them: redraw after a scroll or a wallpaper move. */
+    private void glassMoved() {
+        if (!Glass.on(cfg)) return;
+        apps.strip.invalidate(); // the dock's frosted bar
+        View f = getCurrentFocus();
+        int[] c = f instanceof Tile ? centerOf(f) : null;
+        if (c != null) spot.follow(c[0], c[1]);
+        for (Row row : rows()) {
+            ViewGroup tiles = row.tiles();
+            for (int i = 0; i < tiles.getChildCount(); i++) tiles.getChildAt(i).invalidate();
+        }
+    }
+
+    /**
+     * Options › Focus effect, with frosted glass: after a short pause on an app the background
+     * takes it up (a wash of its colour, its art blurred, a glow or a spotlight on its tile) and
+     * leaving the apps lets it go. The pause keeps a quick run along the row from flickering
+     * through every colour.
+     */
+    private void focusBackdrop(Tile tile) {
+        if (backJob != null) ui.removeCallbacks(backJob);
+        String mode = effect();
+        Tile target = "off".equals(mode) ? null : tile;
+        Item item = target == null ? null : target.item;
+        if (item == backItem && backJob == null && item == null) return;
+        Runnable job = () -> {
+            backJob = null;
+            showBackdrop(target);
+        };
+        backJob = job;
+        ui.postDelayed(job, target == null ? 120 : 260);
+    }
+
+    /** The Focus effect in force: "off" without glass or a picture to put it on. */
+    private String effect() {
+        if (!Glass.on(cfg) || wallKey == null) return "off";
+        return cfg.get(Config.BACKDROP);
+    }
+
+    private void showBackdrop(Tile tile) {
+        Item it = tile == null ? null : tile.item;
+        String mode = effect();
+        boolean wash = "fade".equals(mode) || "halo".equals(mode) || "blur".equals(mode);
+        if (it != null && !mode.equals(it.backdropKind)) {
+            Drawable art = it.banner != null ? it.banner : it.icon;
+            if (art == null || it.backdropRequested) return;
+            it.backdropRequested = true;
+            int sw = getResources().getDisplayMetrics().widthPixels;
+            int sh = getResources().getDisplayMetrics().heightPixels;
+            colorIo.execute(() -> {
+                int color = it.backgroundColor != 0 ? it.backgroundColor : FocusColor.from(art);
+                Glass.Frost f = "blur".equals(mode) ? Glass.backdropOf(art, sw, sh)
+                        : wash ? Glass.fadeOf(Glass.vivid(color), sw, sh) : null;
+                ui.post(() -> {
+                    it.glow = Glass.vivid(color);
+                    it.backdrop = f == null ? null : f.bitmap;
+                    it.backdropLuminance = f == null ? -1f : f.luminance;
+                    it.backdropKind = mode;
+                    it.backdropRequested = false;
+                    View now = getCurrentFocus();
+                    if (resumed && now instanceof Tile && ((Tile) now).item == it) showBackdrop((Tile) now);
+                });
+            });
+            return;
+        }
+        boolean moved = it != backItem;
+        backItem = it;
+
+        // Halo and spotlight: the light layer follows the tile.
+        int[] c = centerOf(tile);
+        if ("halo".equals(mode) || "spotlight".equals(mode)) {
+            spot.aim("halo".equals(mode) ? Spot.HALO : Spot.SPOTLIGHT, it != null && c != null,
+                    c == null ? 0 : c[0], c == null ? 0 : c[1], tile == null ? 0 : tile.getWidth(),
+                    it == null ? 0 : it.glow);
+        } else {
+            spot.aim(Spot.HALO, false, 0, 0, 0, 0);
+        }
+        if (!moved) return;
+
+        if (backAnim != null) backAnim.cancel();
+        Bitmap shown = it == null || !wash ? null : it.backdrop;
+        if (shown != null) {
+            BitmapDrawable fresh = new BitmapDrawable(getResources(), shown);
+            fresh.setFilterBitmap(true);
+            Drawable old = back.getDrawable();
+            if (old != null && back.getAlpha() > 0.05f) {
+                TransitionDrawable t = new TransitionDrawable(new Drawable[] {old, fresh});
+                t.setCrossFadeEnabled(true);
+                back.setImageDrawable(t);
+                t.startTransition(350);
+            } else {
+                back.setImageDrawable(fresh);
+            }
+        }
+        float from = back.getAlpha(), to = shown == null ? 0f : backAlpha(mode) / 255f;
+        backAnim = ValueAnimator.ofFloat(from, to);
+        backAnim.setDuration(420);
+        Bitmap glassArt = shown;
+        backAnim.addUpdateListener(a -> {
+            float v = (Float) a.getAnimatedValue();
+            back.setAlpha(v);
+            Glass.setBackdrop(glassArt != null ? glassArt : Glass.backdropShown(), Math.round(v * 255));
+            glassMoved();
+        });
+        backAnim.addListener(new android.animation.AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(android.animation.Animator a) {
+                if (back.getAlpha() < 0.01f) {
+                    back.setImageDrawable(null);
+                    Glass.setBackdrop(null, 0);
+                }
+            }
+        });
+        backAnim.start();
+        setTone(mixedLuminance());
+    }
+
+    /** How strongly the backdrop shows: the fade is already clear at the top, so it can be bold. */
+    private static int backAlpha(String mode) {
+        return "blur".equals(mode) ? 150 : 215;
+    }
+
+    /** The tile's center on screen, without its focus lift and zoom; null if it is not laid out. */
+    private int[] centerOf(View v) {
+        if (v == null || v.getWidth() == 0) return null;
+        int[] at = new int[2];
+        v.getLocationInWindow(at);
+        // getLocationInWindow includes the zoom around the center and the lift; undo the lift.
+        return new int[] {
+            Math.round(at[0] + v.getWidth() * v.getScaleX() / 2f),
+            Math.round(at[1] + v.getHeight() * v.getScaleY() / 2f - v.getTranslationY()),
+        };
+    }
+
+    /** How bright the screen behind the text is, with the Focus effect showing. */
+    private float mixedLuminance() {
+        String mode = effect();
+        Item it = backItem;
+        if ("spotlight".equals(mode) && it != null) return wallLuminance * (1f - spot.dimming());
+        if (it == null || it.backdrop == null || it.backdropLuminance < 0) return wallLuminance;
+        float a = backAlpha(mode) / 255f;
+        return wallLuminance * (1 - a) + it.backdropLuminance * a;
+    }
+
+    /**
+     * Whether app tiles need the launcher icon as well as the banner. Only Afterglow draws both;
+     * glass shows the banner, and falls back to the icon by itself when an app has none, so its
+     * square icons (often 512 px, about 1 MB each) are not loaded for nothing.
+     */
+    /** The dock's last icon: the TV's inputs, in a frosted menu above it. */
+    private View inputsButton(int size) {
+        return dockButton(size, Glyph.INPUT, getString(R.string.row_inputs), this::showInputs);
+    }
+
+    private List<Item> dockMore = new ArrayList<>();
+
+    /** How many apps the dock keeps before the ••• icon (Options › Apps in the dock). */
+    private int dockKeep() {
+        String v = cfg.get(Config.DOCK_APPS);
+        return "all".equals(v) ? Integer.MAX_VALUE : Integer.parseInt(v);
+    }
+
+    private void showMore(View anchor) {
+        if (dockMore.isEmpty()) return;
+        Folder.show(this, getString(R.string.more_apps), dockMore, cfg, it -> launch(appIntent(it), it.id));
+    }
+
+    /** A glass icon at the end of the dock, for ••• (more apps) and Inputs. */
+    private View dockButton(int size, int glyph, String name, View.OnClickListener click) {
+        boolean light = Glass.on(cfg) && Glass.light();
+        Glyph g = new Glyph(glyph, light ? 0xFF16171A : Ui.TEXT);
+        ImageView b = new ImageView(this);
+        b.setImageDrawable(g);
+        int pad = size / 4;
+        b.setPadding(pad, pad, pad, pad);
+        android.graphics.drawable.GradientDrawable bg = Ui.round(light ? 0x8CFFFFFF : 0x3DFFFFFF, size * 0.22f);
+        bg.setStroke(Math.max(1, dp(1)), light ? 0x26000000 : 0x40FFFFFF);
+        b.setBackground(bg);
+        b.setFocusable(true);
+        b.setClickable(true);
+        b.setContentDescription(name);
+        b.setOnFocusChangeListener((v, has) -> {
+            if (has) {
+                focusBackdrop(null);
+                dockFx.focus(v, name);
+            }
+        });
+        b.setOnClickListener(click);
+        return b;
+    }
+
+    private void showInputs(View anchor) {
+        List<Item> shown = Catalog.visible(cfg, Catalog.INPUTS, inputs.all, null);
+        if (shown.isEmpty()) return;
+        String[] names = new String[shown.size()];
+        for (int i = 0; i < names.length; i++) names[i] = Catalog.label(cfg, shown.get(i)).toString();
+        Popup.show(this, anchor, getString(R.string.row_inputs), names, which -> openInput(shown.get(which)));
+    }
+
+    /** The launcher's own input screen stays in this task; Fire TV's live player gets its own. */
+    private void startInput(Intent own) {
+        if (own.getComponent() == null && !getPackageName().equals(own.getPackage())) launch(own, null);
+        else startActivity(own);
+    }
+
+    private void openInput(Item it) {
+        Intent own = Input.intent(this, cfg, it, Catalog.label(cfg, it));
+        if (own != null) startInput(own);
+        else launch(new Intent(it.intent), null);
+    }
+
+    private boolean wantsIcon() {
+        return "afterglow".equals(cfg.get(Config.TILE_STYLE)) || dock();
+    }
+
+    /** Continue Watching, read on io; the row is rebuilt only when what it shows changed. */
+    private void loadWatch() {
+        if (!"on".equals(cfg.get(Config.WATCH))) {
+            if (!watch.all.isEmpty()) {
+                watch.all = new ArrayList<>();
+                watchShown = "";
+                render(watch);
+            }
+            return;
+        }
+        int posterWidth = Math.round(cardSize()[0] * 1.3f);
+        io.execute(() -> {
+            List<Item> list = WatchNext.load(this, posterWidth);
+            StringBuilder sig = new StringBuilder();
+            for (Item it : list) sig.append(it.id).append(':').append(Math.round(it.progress * 100)).append(';');
+            ui.post(() -> {
+                if (isDestroyed() || sig.toString().equals(watchShown)) return;
+                watchShown = sig.toString();
+                watch.all = list;
+                render(watch);
             });
         });
     }
@@ -1284,11 +1931,20 @@ public final class Home extends Activity {
     }
 
     private void open(Tile t) {
+        if (Catalog.WATCH.equals(t.kind)) {
+            launch(new Intent(t.item.intent), t.item.app);
+            return;
+        }
         if (Catalog.isApp(t.kind)) {
             launch(appIntent(t.item), t.item.id);
             return;
         }
         Intent own = Input.intent(this, cfg, t.item, Catalog.label(cfg, t.item));
+        if (own != null && !getPackageName().equals(own.getPackage())
+                && own.getComponent() == null) {
+            launch(own, null); // Fire TV's live player: its own task, as an app opens
+            return;
+        }
         // The built-in screen goes on top of this one in the same task, so BACK returns here and
         // the HOME takeover's singleTask relaunch clears it. NEW_TASK | RESET_TASK_IF_NEEDED on an
         // activity of the task that is already in front only brings that task forward and starts
@@ -1311,13 +1967,12 @@ public final class Home extends Activity {
     }
 
     private void menu(Tile t) {
-        if (locked()) return;
+        if (locked() || Catalog.WATCH.equals(t.kind)) return;
         if (Catalog.ALL_APPS.equals(t.kind)) {
             boolean pinned = Catalog.shown(cfg, Catalog.APPS, t.item);
-            new AlertDialog.Builder(this, Ui.DIALOG)
-                    .setTitle(Catalog.label(cfg, t.item))
-                    .setItems(new String[] {getString(pinned ? R.string.tile_unpin : R.string.tile_pin),
-                            getString(R.string.tile_rename), getString(R.string.tile_app_info)}, (d, which) -> {
+            Popup.show(this, t, Catalog.label(cfg, t.item),
+                    new String[] {getString(pinned ? R.string.tile_unpin : R.string.tile_pin),
+                            getString(R.string.tile_rename), getString(R.string.tile_app_info)}, which -> {
                         if (which == 0) {
                             Catalog.setShown(cfg, Catalog.APPS, t.item, !pinned);
                             render(apps);
@@ -1327,8 +1982,7 @@ public final class Home extends Activity {
                         } else {
                             appInfo(t);
                         }
-                    })
-                    .show();
+                    });
             return;
         }
         boolean app = Catalog.APPS.equals(t.kind);
@@ -1341,11 +1995,10 @@ public final class Home extends Activity {
         if (icon) menu.add(R.string.tile_icon);
         menu.add(pinning ? R.string.tile_unpin : R.string.tile_hide);
         if (app) menu.add(R.string.tile_app_info);
+        if (app && removable(t.item.id)) menu.add(R.string.tile_uninstall);
         String[] actions = new String[menu.size()];
         for (int i = 0; i < actions.length; i++) actions[i] = getString(menu.get(i));
-        new AlertDialog.Builder(this, Ui.DIALOG)
-                .setTitle(Catalog.label(cfg, t.item))
-                .setItems(actions, (d, which) -> {
+        Popup.show(this, t, Catalog.label(cfg, t.item), actions, which -> {
                     switch (menu.get(which)) {
                         case R.string.tile_move:
                             if (t.getParent() == null) break;
@@ -1371,11 +2024,24 @@ public final class Home extends Activity {
                             Toast.makeText(this, pinning ? R.string.unpinned_toast : R.string.hidden_toast,
                                     Toast.LENGTH_SHORT).show();
                             break;
+                        case R.string.tile_uninstall:
+                            // Android's own confirmation screen asks before anything is removed.
+                            launch(new Intent(Intent.ACTION_DELETE, Uri.fromParts("package", t.item.id, null)), null);
+                            break;
                         default:
                             appInfo(t);
                     }
-                })
-                .show();
+                });
+    }
+
+    /** Apps you installed can be uninstalled from the menu; the TV's own apps cannot. */
+    private boolean removable(String pkg) {
+        try {
+            return (getPackageManager().getApplicationInfo(pkg, 0).flags
+                    & android.content.pm.ApplicationInfo.FLAG_SYSTEM) == 0 && !pkg.equals(getPackageName());
+        } catch (android.content.pm.PackageManager.NameNotFoundException e) {
+            return false;
+        }
     }
 
     private void appInfo(Tile t) {
@@ -1413,7 +2079,8 @@ public final class Home extends Activity {
     private void shift(int by) {
         ViewGroup strip = (ViewGroup) moving.getParent();
         int from = strip.indexOfChild(moving), to = from + by;
-        if (to < 0 || to >= strip.getChildCount()) return;
+        // Only among the tiles: the dock's Inputs icon stays last, and is not a tile.
+        if (to < 0 || to >= tileCount(strip)) return;
         ViewGroup.LayoutParams lp = moving.getLayoutParams();
         strip.removeViewAt(from);
         strip.addView(moving, to, lp);
@@ -1427,9 +2094,19 @@ public final class Home extends Activity {
         ViewGroup strip = (ViewGroup) t.getParent();
         if (strip == null) return;
         List<String> ids = new ArrayList<>();
-        for (int i = 0; i < strip.getChildCount(); i++) ids.add(((Tile) strip.getChildAt(i)).item.id);
+        for (int i = 0; i < strip.getChildCount(); i++) {
+            View v = strip.getChildAt(i);
+            if (v instanceof Tile) ids.add(((Tile) v).item.id);
+        }
         Catalog.saveOrder(cfg, t.kind, ids);
         applied = cfg.version();
+    }
+
+    /** How many of the row's children are tiles (the dock adds its Inputs icon after them). */
+    private static int tileCount(ViewGroup strip) {
+        int n = 0;
+        for (int i = 0; i < strip.getChildCount(); i++) if (strip.getChildAt(i) instanceof Tile) n++;
+        return n;
     }
 
     private int dp(float v) {
