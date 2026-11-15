@@ -76,6 +76,22 @@ public final class Guard extends AccessibilityService {
         Keeper.pause();
     }
 
+    /** Whether the service is on, which {@link #sleep} needs. */
+    static boolean on() {
+        return running != null;
+    }
+
+    /**
+     * Control Panel › Sleep timer: Android 9's lock-screen action, which asks the power manager
+     * to sleep (GlobalActionPerformer.lockScreen). A Fire TV has no lock screen, so it just goes
+     * to standby as with the power button. False when the service is off or Android is older.
+     */
+    static boolean sleep() {
+        Guard g = running;
+        // 8 is GLOBAL_ACTION_LOCK_SCREEN (API 28); the build compiles against API 25.
+        return g != null && Build.VERSION.SDK_INT >= 28 && g.performGlobalAction(8);
+    }
+
     static void home(Context c) {
         home(c, 0);
     }

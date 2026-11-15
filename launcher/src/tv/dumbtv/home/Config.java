@@ -329,6 +329,16 @@ final class Config {
         save();
     }
 
+    /** Several keys in one write; an empty value removes its key, as with {@link #set}. */
+    void setAll(Map<String, String> changes) {
+        for (Map.Entry<String, String> e : changes.entrySet()) {
+            if (e.getValue() == null || e.getValue().isEmpty()) values.remove(e.getKey());
+            else values.put(e.getKey(), e.getValue());
+        }
+        version++;
+        save();
+    }
+
     List<String> list(String key) {
         List<String> out = new ArrayList<>();
         for (String s : get(key, "").split(",")) {

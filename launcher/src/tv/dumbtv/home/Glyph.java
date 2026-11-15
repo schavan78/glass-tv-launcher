@@ -16,7 +16,7 @@ import android.graphics.drawable.Drawable;
 final class Glyph extends Drawable {
     static final int APPEARANCE = 0, EFFECT = 1, WALLPAPER = 2, ROWS = 3, CLOCK = 4, ADVANCED = 5,
             ABOUT = 6, WIFI = 7, BLUETOOTH = 8, MEMORY = 9, SETTINGS = 10, INPUT = 11, DISPLAY = 12,
-            SOUND = 13, HOME = 14, CHECK = 15, MORE = 16;
+            SOUND = 13, HOME = 14, CHECK = 15, MORE = 16, PERSON = 17, MOON = 18;
 
     private final int kind;
     private final Paint line = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -153,6 +153,18 @@ final class Glyph extends Drawable {
                 break;
             case MORE: // three dots
                 for (int i = 0; i < 3; i++) c.drawCircle(6 + i * 6, 12, 1.9f, solid);
+                break;
+            case PERSON: // a head and shoulders
+                c.drawCircle(12, 8.5f, 3.6f, line);
+                r.set(5, 14, 19, 26);
+                c.drawArc(r, 180, 180, false, line);
+                break;
+            case MOON: // a crescent: a circle with a second one cut out of its upper right
+                path.addCircle(12, 12, 8, Path.Direction.CW);
+                Path bite = new Path();
+                bite.addCircle(16.5f, 8, 6.5f, Path.Direction.CW);
+                path.op(bite, Path.Op.DIFFERENCE);
+                c.drawPath(path, solid);
                 break;
             default:
                 break;

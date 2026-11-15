@@ -108,6 +108,11 @@
             </intent-filter>
         </receiver>
 
+        <!-- Control Panel › Sleep timer: only its own alarms reach it. -->
+        <receiver
+            android:name=".Sleep"
+            android:exported="false" />
+
         <service
             android:name=".Guard"
             android:label="@string/guard_label"

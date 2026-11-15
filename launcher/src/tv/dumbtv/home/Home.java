@@ -59,6 +59,8 @@ public final class Home extends Activity {
     private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
     private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
     private static final String APPSTORE = "com.amazon.venezia";
+    /** Preferences file and key of the app opened last, for {@link #landOnLast}. */
+    private static final String LAST = "last_opened";
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newSingleThreadExecutor();
@@ -1130,7 +1132,7 @@ public final class Home extends Activity {
         } else if (keep != null && target.getChildCount() > 0) {
             target.getChildAt(0).requestFocus();
         } else if (getCurrentFocus() == null || !landed) {
-            focusFirst();
+            if (landed || !landOnLast(row)) focusFirst();
         }
     }
 
@@ -1391,6 +1393,27 @@ public final class Home extends Activity {
         return null;
     }
 
+    /**
+     * On a fresh start (after a reboot, or when Android closed this launcher for memory while an
+     * app played) the cursor goes to the app opened last, not the first one. Returns false when
+     * that app is not in {@code row}.
+     */
+    private boolean landOnLast(Row row) {
+        if (row != apps) return false;
+        String id = getSharedPreferences(LAST, MODE_PRIVATE).getString(LAST, null);
+        View v = null;
+        // Not findTile: the dock hides the row's title, and findTile skips such rows.
+        ViewGroup tiles = apps.tiles();
+        for (int i = 0; id != null && v == null && i < tiles.getChildCount(); i++) {
+            View t = tiles.getChildAt(i);
+            if (t instanceof Tile && id.equals(((Tile) t).item.id)) v = t;
+        }
+        if (v == null) return false;
+        landed = true;
+        v.requestFocus();
+        return true;
+    }
+
     private void focusFirst() {
         View first = null;
         for (Row row : rows()) {
@@ -1417,6 +1440,9 @@ public final class Home extends Activity {
         int hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
         greeting.setText(hour >= 5 && hour < 12 ? R.string.greet_morning : hour >= 12 && hour < 17
                 ? R.string.greet_afternoon : hour >= 17 && hour < 22 ? R.string.greet_evening : R.string.greet_night);
+        // Control Panel › Profile: any profile but the first is named, so a guest sees whose dock it is.
+        String profile = Profiles.current(cfg);
+        if (!Profiles.NAMES[0].equals(profile)) greeting.append(" · " + profile);
         Locale locale = Locale.getDefault();
         date.setText(DateFormat.format(DateFormat.getBestDateTimePattern(locale, "EEEEdMMMM"), now));
         if (meter.getVisibility() == View.VISIBLE) {
@@ -1960,7 +1986,11 @@ public final class Home extends Activity {
             // Prime Video, the animation showed home again between the two (#169).
             startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED),
                     ActivityOptions.makeCustomAnimation(this, 0, 0).toBundle());
-            if (pkg != null) Recent.opened(this, pkg);
+            if (pkg != null) {
+                Recent.opened(this, pkg);
+                // Survives Android closing this launcher while the app plays: see landOnLast.
+                getSharedPreferences(LAST, MODE_PRIVATE).edit().putString(LAST, pkg).apply();
+            }
         } catch (ActivityNotFoundException | SecurityException e) {
             Toast.makeText(this, R.string.could_not_open, Toast.LENGTH_SHORT).show();
         }

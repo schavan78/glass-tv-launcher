@@ -211,6 +211,16 @@
     <string name="panel_not_connected">Not connected</string>
     <string name="panel_on">On</string>
     <string name="panel_off">Off</string>
+    <string name="panel_sleep">Sleep timer</string>
+    <string name="panel_sleep_off">Off · OK sets 30 min</string>
+    <string name="panel_sleep_at">TV off at %1$s</string>
+    <string name="sleep_set">The TV turns off in %1$d minutes</string>
+    <string name="sleep_cancelled">Sleep timer off</string>
+    <string name="sleep_warn">The TV turns off in 1 minute</string>
+    <string name="sleep_needs_guard">The sleep timer needs dumbtv\'s accessibility service on</string>
+    <string name="panel_profile">Profile</string>
+    <string name="panel_profile_state">%1$s · OK switches</string>
+    <string name="profile_switched">Profile: %1$s</string>
     <string name="tile_uninstall">Uninstall</string>
     <string name="more_apps">More apps</string>
     <string name="greet_morning">Good morning</string>

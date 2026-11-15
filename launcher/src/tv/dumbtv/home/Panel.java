@@ -84,6 +84,12 @@ public final class Panel extends Activity {
                 () -> open(new Intent("android.settings.APPLICATION_SETTINGS")));
         pill(lastRow, Glyph.HOME, getString(R.string.options_title), getString(R.string.panel_home_state),
                 () -> open(new Intent(this, Options.class)));
+        pill(grid, null, Glyph.MOON, getString(R.string.panel_sleep), sleepState(), this::stepSleep);
+        sleepStateView = lastState;
+        Config cfg = Config.get(this);
+        pill(lastRow, Glyph.PERSON, getString(R.string.panel_profile),
+                getString(R.string.panel_profile_state, Profiles.current(cfg)), this::nextProfile);
+        profileStateView = lastState;
 
         LinearLayout buttons = new LinearLayout(this);
         buttons.setOrientation(LinearLayout.HORIZONTAL);
@@ -227,6 +233,36 @@ public final class Panel extends Activity {
     private String bluetoothState() {
         BluetoothAdapter bt = BluetoothAdapter.getDefaultAdapter();
         return getString(bt != null && bt.isEnabled() ? R.string.panel_on : R.string.panel_off);
+    }
+
+    private TextView sleepStateView, profileStateView;
+
+    private String sleepState() {
+        long at = Sleep.endsAt(this);
+        if (at == 0) return getString(R.string.panel_sleep_off);
+        return getString(R.string.panel_sleep_at, android.text.format.DateFormat.getTimeFormat(this).format(at));
+    }
+
+    /** Each press goes one step on: 30, 60, 90, 120 minutes, then off. */
+    private void stepSleep() {
+        int minutes = Sleep.nextMinutes(this);
+        if (minutes > 0 && !Guard.on()) {
+            Toast.makeText(this, R.string.sleep_needs_guard, Toast.LENGTH_LONG).show();
+            return;
+        }
+        Sleep.set(this, minutes);
+        sleepStateView.setText(sleepState());
+        Toast.makeText(this, minutes > 0 ? getString(R.string.sleep_set, minutes)
+                : getString(R.string.sleep_cancelled), Toast.LENGTH_SHORT).show();
+    }
+
+    /** Me, Guests, Kids in turn; the home screen shows the new dock when the panel closes. */
+    private void nextProfile() {
+        Config cfg = Config.get(this);
+        Profiles.switchTo(cfg, Profiles.next(cfg));
+        String now = Profiles.current(cfg);
+        profileStateView.setText(getString(R.string.panel_profile_state, now));
+        Toast.makeText(this, getString(R.string.profile_switched, now), Toast.LENGTH_SHORT).show();
     }
 
     private void showMemory() {
