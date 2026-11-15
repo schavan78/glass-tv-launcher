@@ -10,6 +10,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 # shellcheck disable=SC1091
 source version.env
 APK_URL=https://github.com/humblemuzzu/dumbtv/releases/download/launcher-v$VERSION/dumbtv-home.apk
+# glass-tv-launcher: its own version and release, kept apart so dumbtv updates merge cleanly.
+[[ -f fork.env ]] && source fork.env
 
 PKG=tv.dumbtv.home
 GUARD=$PKG/$PKG.Guard

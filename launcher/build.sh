@@ -13,6 +13,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 
 # shellcheck disable=SC1091
 source version.env
+# glass-tv-launcher: its own version and release, kept apart so dumbtv updates merge cleanly.
+[[ -f fork.env ]] && source fork.env
 MIN_SDK=${MIN_SDK:-25}
 
 SDK=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}
