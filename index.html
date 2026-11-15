@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>glass-tv-launcher: an ad-free glass home screen for Fire TV</title>
+<meta name="description" content="Free, open-source Fire TV launcher with a frosted-glass dock, big clock, sleep timer, profiles and Live TV. No ads, no sponsored rows, no auto-playing trailers, no tracking.">
+<meta name="keywords" content="Fire TV launcher, ad-free Fire TV home screen, Fire TV custom launcher, Fire OS launcher, Fire TV debloat, Android TV launcher, no ads launcher, open source launcher">
+<link rel="canonical" href="https://schavan78.github.io/glass-tv-launcher/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="glass-tv-launcher: an ad-free glass home screen for Fire TV">
+<meta property="og:description" content="Free, open-source Fire TV launcher with a frosted-glass dock, big clock, sleep timer and profiles. No ads, no trailers, no tracking.">
+<meta property="og:image" content="https://schavan78.github.io/glass-tv-launcher/assets/home.png">
+<meta property="og:url" content="https://schavan78.github.io/glass-tv-launcher/">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"glass-tv-launcher",
+ "operatingSystem":"Fire OS 6-8 (Android 7.1-11)","applicationCategory":"UtilitiesApplication",
+ "description":"Ad-free frosted-glass home screen launcher for Amazon Fire TV and Fire TV smart TVs.",
+ "url":"https://schavan78.github.io/glass-tv-launcher/","downloadUrl":"https://github.com/schavan78/glass-tv-launcher/releases/latest",
+ "license":"https://opensource.org/licenses/MIT","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},
+ "screenshot":"https://schavan78.github.io/glass-tv-launcher/assets/home.png"}
+</script>
+<style>
+:root{--bg:#f4f6f9;--fg:#15171b;--muted:#5b6270;--card:#fff;--line:#dde2ea;--accent:#2f6fed}
+@media (prefers-color-scheme:dark){:root{--bg:#0d0f13;--fg:#eef1f6;--muted:#9aa3b2;--card:#171a20;--line:#272c35;--accent:#6c9bff}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:980px;margin:0 auto;padding:40px 16px 64px}
+h1{font-size:clamp(2rem,6vw,3.2rem);line-height:1.1;margin:0 0 12px;letter-spacing:-.02em}
+h2{margin:48px 0 12px;font-size:1.5rem}
+p.lead{font-size:1.2rem;color:var(--muted);margin:0 0 24px;max-width:46em}
+img{max-width:100%;height:auto;border-radius:14px;border:1px solid var(--line);display:block}
+.hero{margin:28px 0}
+.buttons{display:flex;flex-wrap:wrap;gap:12px}
+.btn{display:inline-block;padding:12px 20px;border-radius:999px;text-decoration:none;font-weight:600;border:1px solid var(--line);color:var(--fg);background:var(--card)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+ul.features{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;padding:0;list-style:none}
+ul.features li{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+ul.features b{display:block}
+.shots{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+pre{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;overflow-x:auto;font-size:14px}
+a{color:var(--accent)}
+footer{margin-top:56px;color:var(--muted);font-size:14px}
+</style>
+</head>
+<body>
+<main>
+<h1>A clean glass home screen for Fire TV</h1>
+<p class="lead">glass-tv-launcher replaces Amazon's Fire TV home screen with a frosted-glass dock and a big clock. No sponsored rows, no auto-playing trailers, no tracking. It's free and open source.</p>
+<div class="buttons">
+  <a class="btn primary" href="https://github.com/schavan78/glass-tv-launcher/releases/latest">Download</a>
+  <a class="btn" href="https://github.com/schavan78/glass-tv-launcher">Source on GitHub</a>
+  <a class="btn" href="#install">How to install</a>
+</div>
+<img class="hero" src="assets/home.png" alt="glass-tv-launcher on a TV: a large clock over a snowy mountain wallpaper and a frosted glass dock of app icons" width="960" height="540">
+
+<h2>Features</h2>
+<ul class="features">
+  <li><b>Glass dock</b>App icons in a frosted dock that magnifies the focused app, plus a folder for the rest.</li>
+  <li><b>Big clock and greeting</b>A glass clock lit from above, with "Good morning" or "Good evening".</li>
+  <li><b>Adapts to your wallpaper</b>Text and glass switch between light and dark to stay readable on any picture.</li>
+  <li><b>Control Panel</b>Wi-Fi, Bluetooth, free memory, picture and sound, inputs and settings in one place.</li>
+  <li><b>Sleep timer</b>Turns the TV off after 30, 60, 90 or 120 minutes.</li>
+  <li><b>Profiles</b>Me, Guests and Kids, each with its own apps in the dock.</li>
+  <li><b>Live TV</b>One tile resumes cable or antenna on the last channel, with the guide working.</li>
+  <li><b>Private</b>No internet permission and no advertising ID. Your apps, HDMI inputs and casting are left alone.</li>
+</ul>
+
+<div class="shots">
+  <img src="assets/control-panel.png" alt="The Control Panel with Wi-Fi, Bluetooth, Memory, Picture and sound, Apps, Home settings, Sleep timer and Profile tiles" width="960" height="540" loading="lazy">
+  <img src="assets/profiles.png" alt="The Guests profile: the greeting reads Good morning · Guests and the dock shows a different set of apps" width="960" height="540" loading="lazy">
+</div>
+
+<h2 id="install">Install</h2>
+<p>You need a computer with <a href="https://developer.android.com/tools/releases/platform-tools">adb</a>, and the TV on the same network with <b>Settings › My Fire TV › Developer options › ADB debugging</b> turned on.</p>
+<pre>git clone https://github.com/schavan78/glass-tv-launcher.git
+cd glass-tv-launcher
+adb connect YOUR-TV-IP:5555
+./launcher/install.sh</pre>
+<p>The installer checks the download's checksum, installs the launcher and makes it your home screen. To go back to Amazon's home screen at any time, run <code>./launcher/install.sh --undo</code>.</p>
+
+<h2>Works on</h2>
+<p>Tested on a Fire TV smart TV (Fire OS 7, Android 9, 4K). It's built on <a href="https://github.com/humblemuzzu/dumbtv">dumbtv</a>, which supports Fire TV Sticks, Cubes and smart TVs on Fire OS 6 to 8.</p>
+
+<footer>
+<p>Open source under the MIT license. Built on <a href="https://github.com/humblemuzzu/dumbtv">dumbtv</a> by Muzammil and contributors. Wallpaper photo by Richard Lu on Unsplash.</p>
+<p>Amazon, Fire TV and Fire OS are trademarks of Amazon.com, Inc. This project is not affiliated with or endorsed by Amazon or Apple.</p>
+</footer>
+</main>
+</body>
+</html>

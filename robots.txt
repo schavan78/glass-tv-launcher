@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://schavan78.github.io/glass-tv-launcher/sitemap.xml
